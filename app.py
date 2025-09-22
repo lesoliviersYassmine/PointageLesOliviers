@@ -2763,7 +2763,9 @@ def main():
         menu_options.remove("👥 Gestion des Utilisateurs")
         menu_options.remove("👥 Gestion du Personnel")
         menu_options.remove("🌙 Tours de Rôle Nuit")
-        menu_options.remove("📋 Gestion des Absences")  # Les non-admins ne peuvent pas gérer les absences
+        menu_options.remove("📋 Gestion des Absences")
+        menu_options.remove("📊 Historique des Pointages")
+        menu_options.remove("📈 Statistiques")#  # Les non-admins ne peuvent pas gérer les absences
     
     choice = st.sidebar.selectbox("Navigation", menu_options)
     
@@ -2945,7 +2947,7 @@ def show_pointage_du_jour():
                         st.write(f"**Heure prévue:** {emp['heure_entree_prevue']} - {emp['heure_sortie_prevue']}")
                         
                         if pointage is not None and pointage.get('heure_arrivee'):
-                            st.success(f"✅ Arrivée: {pointage['heure_arrivee']} ({pointage['statut_arrivee']})")
+                            st.success(f"✅ Entrée: {pointage['heure_arrivee']} ({pointage['statut_arrivee']})")
                             if pointage.get('retard_minutes', 0) > 0:
                                 st.warning(f"⏰ Retard: {pointage['retard_minutes']} minutes")
                         else:
@@ -2953,11 +2955,11 @@ def show_pointage_du_jour():
                     
                     with col2:
                         if pointage is not None and pointage.get('heure_depart'):
-                            st.success(f"✅ Départ: {pointage['heure_depart']} ({pointage['statut_depart']})")
+                            st.success(f"✅ Sortie: {pointage['heure_depart']} ({pointage['statut_depart']})")
                             if pointage.get('depart_avance_minutes', 0) > 0:
-                                st.warning(f"⏰ Départ anticipé: {pointage['depart_avance_minutes']} minutes")
+                                st.warning(f"⏰ Sortie anticipé: {pointage['depart_avance_minutes']} minutes")
                         else:
-                            st.info("ℹ️ Départ non enregistré")
+                            st.info("ℹ️ Sortie non enregistré")
                     
                     # Formulaire de pointage simplifié
                     heure_actuelle = datetime.now().time()
@@ -2966,26 +2968,26 @@ def show_pointage_du_jour():
                     col_btn1, col_btn2, col_btn3 = st.columns(3)
                     
                     with col_btn1:
-                        if st.button("✅ Pointer l'arrivée", key=f"arr_{emp_id}"):
+                        if st.button("✅ Pointer l'entrée", key=f"arr_{emp_id}"):
                             heure_reelle = datetime.now().time()
                             success, retard = enregistrer_pointage_arrivee(
                                 emp_id, date.today(), heure_reelle, "", ""
                             )
                             if success:
-                                st.success(f"✅ Arrivée enregistrée à {heure_reelle.strftime('%H:%M:%S')}")
+                                st.success(f"✅ Entrée enregistrée à {heure_reelle.strftime('%H:%M:%S')}")
                                 time.sleep(0.5)
                                 st.rerun()
                             else:
                                 st.error("❌ Erreur lors de l'enregistrement")
                     
                     with col_btn2:
-                        if st.button("🚪 Pointer le départ", key=f"dep_{emp_id}"):
+                        if st.button("🚪 Pointer la sortie", key=f"dep_{emp_id}"):
                             heure_reelle = datetime.now().time()
                             success, avance = enregistrer_pointage_depart(
                                 emp_id, date.today(), heure_reelle, "", ""
                             )
                             if success:
-                                st.success(f"✅ Départ enregistré à {heure_reelle.strftime('%H:%M:%S')}")
+                                st.success(f"✅ sortie enregistré à {heure_reelle.strftime('%H:%M:%S')}")
                                 time.sleep(0.5)
                                 st.rerun()
                             else:
@@ -4375,4 +4377,5 @@ if __name__ == "__main__":
         st.stop()
     
     # Lancement de l'application
+
     main()

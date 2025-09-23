@@ -1119,108 +1119,115 @@ def show_timezone_config():
         # Ici vous pourriez sauvegarder dans la base de données
         st.success(f"✅ Fuseau horaire configuré : UTC{timezone_offset:+d}")
 
-def enregistrer_pointage_arrivee(personnel_id, date_pointage, heure_arrivee=None, motif_retard=None, notes=None, est_absent=False):
-    # Utiliser l'heure actuelle si aucune heure n'est fournie
-    if heure_arrivee is None:
-        heure_arrivee = get_current_time()  # ← IMPORTANT: utilise get_current_time()
+def _as_time(value) -> tm:
+    if isinstance(value, tm):
+        return value
+    elif isinstance(value, str):
+        # Gérer les strings de temps
+        for fmt in ("%H:%M:%S", "%H:%M:%S.%f", "%H:%M"):
+            try:
+                return datetime.strptime(value, fmt).time()
+            except ValueError:
+                continue
+    # Si tout échoue, retourner une heure par défaut
+    return tm(8, 0)
+
+def calculer_statut_arrivee(heure_pointage, heure_prevue):
+    """
+    Calcule le statut de pointage selon les règles spécifiques:
+    - Plage normale: 15min avant à 5min avant l'heure prévue (07:45 à 07:55 pour 08:00)
+    - En retard: après 5min avant l'heure prévue jusqu'à 29 minutes de retard
+    - Absent: 30 minutes ou plus de retard (après 08:30 pour 08:00)
+    """
+    if not heure_pointage or not heure_prevue:
+        return "Non pointé", 0, False
     
-    # Vérifier si l'employé est en congé
-    if est_en_conge(personnel_id, date_pointage):
-        st.error("❌ Cet employé est en congé aujourd'hui. Pointage impossible.")
-        return False, 0
+    heure_prevue = _as_time(heure_prevue)
+    heure_pointage = _as_time(heure_pointage)
     
+    # Convertir en datetime pour les calculs
+    dt_prevue = datetime.combine(date.today(), heure_prevue)
+    dt_pointage = datetime.combine(date.today(), heure_pointage)
+    
+    # Calcul de la différence en minutes
+    difference_minutes = (dt_pointage - dt_prevue).total_seconds() / 60
+    
+    # Définition des plages horaires spécifiques
+    debut_plage = dt_prevue - timedelta(minutes=15)  # 07:45 pour 08:00
+    fin_plage = dt_prevue - timedelta(minutes=5)     # 07:55 pour 08:00
+    limite_retard = dt_prevue + timedelta(minutes=30) # 08:30 pour 08:00
+    
+    if debut_plage <= dt_pointage <= fin_plage:
+        return "Présent à l'heure", 0, False
+    elif fin_plage < dt_pointage < limite_retard:
+        retard = (dt_pointage - fin_plage).total_seconds() / 60
+        return "En retard", int(retard), False
+    elif dt_pointage >= limite_retard:
+        return "Absent", 30, True  # Retourne 30 minutes de retard et marque comme absent
+    elif dt_pointage < debut_plage:
+        avance = (debut_plage - dt_pointage).total_seconds() / 60
+        return "En avance", int(-avance), False
+    
+    return "Non pointé", 0, False
+
+def calculer_statut_arrivee_nuit(heure_pointage, heure_prevue):
+    """Calcule le statut de pointage pour les employés de nuit avec des règles spécifiques"""
+    if not heure_pointage or not heure_prevue:
+        return "Non pointé", 0, False
+    
+    heure_prevue = _as_time(heure_prevue)
+    heure_pointage = _as_time(heure_pointage)
+    
+    # Convertir en datetime pour les calculs
+    dt_prevue = datetime.combine(date.today(), heure_prevue)
+    dt_pointage = datetime.combine(date.today(), heure_pointage)
+    
+    # Pour les nuitiers, on considère qu'ils peuvent pointer à tout moment
+    # mais on garde une logique de retard basée sur leur heure prévue
+    
+    difference_minutes = (dt_pointage - dt_prevue).total_seconds() / 60
+    
+    # Plages plus flexibles pour les nuitiers
+    debut_plage = dt_prevue - timedelta(minutes=30)  # 30 minutes avant
+    fin_plage = dt_prevue + timedelta(minutes=60)    # 1 heure après
+    
+    if debut_plage <= dt_pointage <= fin_plage:
+        return "Présent à l'heure", 0, False
+    elif dt_pointage > fin_plage:
+        retard = (dt_pointage - fin_plage).total_seconds() / 60
+        return "En retard", int(retard), False
+    elif dt_pointage < debut_plage:
+        return "En avance", 0, False
+    
+    return "Non pointé", 0, False
+
+def est_en_conge(personnel_id, date_check):
+    """Vérifie si l'employé est en congé à une date donnée"""
     conn = get_connection()
     if conn is None:
-        return False, 0
+        return False
+    
     try:
-        personnel_id = int(personnel_id)
-        
         with conn:
             cur = conn.cursor()
-            # Vérifier si c'est un employé de nuit
-            cur.execute("SELECT poste FROM personnels WHERE id = ?", (personnel_id,))
-            poste_result = cur.fetchone()
-            poste = poste_result['poste'] if poste_result else 'Jour'
-            
-            # Heure prévue
-            cur.execute("SELECT heure_entree_prevue FROM personnels WHERE id = ?", (personnel_id,))
-            res = cur.fetchone()
-            if not res:
-                return False, 0
-            heure_prevue = _as_time(res['heure_entree_prevue'])
-
-            # Convertir l'heure d'arrivée en time object pour les calculs
-            heure_arrivee_time = _as_time(heure_arrivee)
-
-            # Pour les employés de nuit, ajuster la logique de calcul
-            if poste == 'Nuit':
-                # Pour les nuitiers, on utilise une logique différente
-                statut_arrivee, retard_minutes, est_absent_calc = calculer_statut_arrivee_nuit(heure_arrivee_time, heure_prevue)
-            else:
-                # Pour les employés de jour, logique normale
-                statut_arrivee, retard_minutes, est_absent_calc = calculer_statut_arrivee(heure_arrivee_time, heure_prevue)
-
-            # Convertir l'heure en string pour SQLite
-            heure_arrivee_str = heure_arrivee_time.strftime('%H:%M:%S')
-
-            # Si le système détecte une absence, enregistrer dans la table absences
-            if est_absent or est_absent_calc:
-                cur.execute(
-                    """
-                    INSERT OR IGNORE INTO absences (personnel_id, date_absence, motif, justifie)
-                    VALUES (?, ?, ?, ?)
-                    """,
-                    (personnel_id, date_pointage, motif_retard or f"Absence automatique (retard de {retard_minutes} minutes)", False)
-                )
-                # MAINTENANT on enregistre quand même le pointage avec le statut "Absent"
-                statut_arrivee = "Absent"
-            
-            # Enregistrer le retard si applicable (seulement si < 30 minutes)
-            if retard_minutes > 0 and retard_minutes < 30:
-                cur.execute(
-                    """
-                    INSERT OR IGNORE INTO retards (personnel_id, date_retard, retard_minutes, motif)
-                    VALUES (?, ?, ?, ?)
-                    """,
-                    (personnel_id, date_pointage, retard_minutes, motif_retard),
-                )
-
-            # Vérifier si un pointage existe déjà pour cette journée
             cur.execute(
-                "SELECT id FROM pointages WHERE personnel_id = ? AND date_pointage = ?",
-                (personnel_id, date_pointage)
+                """
+                SELECT COUNT(*) FROM conges 
+                WHERE personnel_id = ? 
+                AND statut = 'Approuvé'
+                AND date_debut <= ? 
+                AND date_fin >= ?
+                """,
+                (personnel_id, date_check, date_check)
             )
-            existing = cur.fetchone()
-
-            if existing:
-                # Mettre à jour l'arrivée
-                cur.execute(
-                    """
-                    UPDATE pointages 
-                    SET heure_arrivee = ?, statut_arrivee = ?, retard_minutes = ?, 
-                        motif_retard = ?, notes = COALESCE(?, notes)
-                    WHERE id = ?
-                    """,
-                    (heure_arrivee_str, statut_arrivee, retard_minutes, motif_retard, notes, existing['id'])
-                )
-            else:
-                # Nouveau pointage
-                cur.execute(
-                    """
-                    INSERT INTO pointages (personnel_id, date_pointage, heure_arrivee, statut_arrivee, retard_minutes, motif_retard, notes)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (personnel_id, date_pointage, heure_arrivee_str, statut_arrivee, retard_minutes, motif_retard, notes),
-                )
-                
-        return True, retard_minutes
+            count = cur.fetchone()[0]
+            return count > 0
     except Exception as e:
-        st.error(f"Erreur enregistrement pointage arrivée: {e}")
-        return False, 0
+        st.error(f"Erreur vérification congé: {e}")
+        return False
     finally:
         if conn:
             conn.close()
-
 def calculer_statut_arrivee_nuit(heure_pointage, heure_prevue):
     """Calcule le statut de pointage pour les employés de nuit avec des règles spécifiques"""
     if not heure_pointage or not heure_prevue:
@@ -1258,13 +1265,15 @@ def enregistrer_pointage_depart(personnel_id, date_pointage, heure_depart=None, 
         st.error("❌ Cet employé est en congé aujourd'hui. Pointage impossible.")
         return False, 0
     
-    # ✅ CORRECTION : Utiliser l'heure actuelle si aucune heure n'est fournie
+    # CORRECTION : Utiliser l'heure actuelle si aucune heure n'est fournie
     if heure_depart is None:
         heure_depart = get_current_time()
     
     conn = get_connection()
     if conn is None:
+        st.error("❌ Erreur de connexion à la base de données")
         return False, 0
+    
     try:
         personnel_id = int(personnel_id)
         
@@ -1274,7 +1283,9 @@ def enregistrer_pointage_depart(personnel_id, date_pointage, heure_depart=None, 
             cur.execute("SELECT heure_sortie_prevue FROM personnels WHERE id = ?", (personnel_id,))
             res = cur.fetchone()
             if not res:
+                st.error("❌ Employé non trouvé")
                 return False, 0
+            
             heure_sortie_prevue = _as_time(res['heure_sortie_prevue'])
 
             # Calcul départ en avance
@@ -1325,9 +1336,11 @@ def enregistrer_pointage_depart(personnel_id, date_pointage, heure_depart=None, 
                     """,
                     (personnel_id, date_pointage, heure_depart_str, statut_depart, depart_avance_minutes, motif_depart_avance, notes),
                 )
+        
         return True, depart_avance_minutes
+        
     except Exception as e:
-        st.error(f"Erreur enregistrement pointage départ: {e}")
+        st.error(f"❌ Erreur enregistrement pointage départ: {e}")
         return False, 0
     finally:
         if conn:
